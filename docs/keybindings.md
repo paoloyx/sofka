@@ -587,6 +587,34 @@ for those operations.
 | `close`   | `q`              |
 | `refresh` | `r`              |
 
+### `[keys.sveltos]`
+
+`:sveltos` opens a read-only dashboard scoped to the connected management
+context across namespaces, using Sveltos v1.16.0 as compatibility baseline.
+`/` edits a local case-insensitive substring filter; `Enter` applies it and
+`Esc` cancels editing. Filter matches displayed fields and does not use resource
+selector grammar or make API requests.
+
+Defaults:
+
+```toml
+[keys.sveltos]
+accept = "enter"
+back = "esc"
+close = "q"
+down = ["j", "down"]
+filter = "/"
+first = ["g", "home"]
+last = ["G", "end"]
+next_view = "tab"
+page_down = ["pagedown", "ctrl-f"]
+page_up = ["pageup", "ctrl-b"]
+previous_view = "backtab"
+refresh = "r"
+up = ["k", "up"]
+yaml = "y"
+```
+
 ### `[keys.pvc_explore]`
 
 | Action        | Default bindings |

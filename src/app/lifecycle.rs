@@ -496,6 +496,9 @@ impl App {
         self.namespace_request += 1;
         self.namespace_errors.clear();
         self.restore_workloads_identity();
+        if let Some(task) = self.sveltos_task.take() {
+            task.abort();
+        }
         let Some(kind) = self.kind.clone() else {
             return;
         };
@@ -1107,6 +1110,10 @@ impl App {
     }
 
     pub(super) fn bump_generation(&mut self) {
+        if let Some(task) = &self.sveltos_task {
+            task.abort();
+        }
+        self.sveltos_request = self.sveltos_request.wrapping_add(1);
         self.clear_watch_error_flash();
         self.stop_resource_refresh();
         self.clear_document_source();
@@ -1511,6 +1518,15 @@ impl App {
                 );
                 self.pulse = data;
             }
+            Msg::SveltosData {
+                generation,
+                request,
+                reads,
+            } => self.receive_sveltos(generation, request, reads),
+            Msg::SveltosPoll {
+                generation,
+                request,
+            } => self.receive_sveltos_poll(generation, request),
             Msg::RbacReport {
                 generation,
                 request,

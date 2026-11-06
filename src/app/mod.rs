@@ -205,6 +205,7 @@ pub enum Mode {
     Confirm,
     Prompt,
     Pulse,
+    Sveltos,
     Xray,
     Rbac,
     /// Deterministic "why is this unhealthy?" explanation for the selection.
@@ -757,6 +758,7 @@ enum PaletteAction {
     Mouse,
     Ctx,
     Pulse,
+    Sveltos,
     Xray,
     Users,
     Groups,
@@ -850,6 +852,10 @@ const PALETTE_COMMANDS: &[PaletteCommand] = &[
     PaletteCommand {
         action: PaletteAction::Pulse,
         names: &["pulse", "dashboard", "pu"],
+    },
+    PaletteCommand {
+        action: PaletteAction::Sveltos,
+        names: &["sveltos"],
     },
     PaletteCommand {
         action: PaletteAction::Xray,
@@ -2485,6 +2491,9 @@ pub struct App {
     pub node_loads: Option<HashMap<String, crate::columns::NodeLoad>>,
 
     pub pulse: Pulse,
+    pub(crate) sveltos: sveltos::State,
+    sveltos_request: u64,
+    sveltos_task: Option<JoinHandle<()>>,
     pub xray_items: Vec<XrayItem>,
     pub xray_state: ListState,
     /// Findings from the explain-unhealthy view, and the row cursor over them
@@ -2929,6 +2938,9 @@ impl App {
             node_history: metrics_history::NodeHistory::default(),
             node_loads: None,
             pulse: Pulse::default(),
+            sveltos: sveltos::State::default(),
+            sveltos_request: 0,
+            sveltos_task: None,
             xray_items: Vec::new(),
             xray_state: ListState::default(),
             explain_items: Vec::new(),
@@ -3172,6 +3184,7 @@ mod rollout;
 mod rows;
 mod secret_edit;
 mod snapshot;
+pub(crate) mod sveltos;
 mod timeline;
 mod transfer;
 mod update;

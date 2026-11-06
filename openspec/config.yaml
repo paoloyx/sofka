@@ -1,0 +1,53 @@
+schema: spec-driven
+githubCopilot:
+    cloudAgent: false
+
+context: |
+    Product: sofka, a k9s-style Kubernetes terminal UI. One binary with
+    interactive TUI and headless modes (--check, --snapshot, info, plugin,
+    completion).
+    Stack: Rust 2024, tokio, kube-rs + k8s-openapi, ratatui + crossterm, clap,
+    serde (TOML/YAML config).
+    Architecture: one tokio::select! loop in main.rs folds terminal input, a
+    generation-tagged store::Msg channel, a 16ms frame tick and a 1s tick into
+    App. The UI never blocks on the network: watches, metrics, logs and analysis
+    gathers run as tasks and send Msgs; stale generations are dropped.
+    App (src/app/mod.rs) is a Mode state machine split into app/*.rs per
+    feature. Pure, unit-tested logic lives in top-level modules (explain,
+    adjacent, timeline, gitops, argocd, helm, filter, pvcexplore, ...); ui.rs
+    renders; columns.rs/views.rs define columns.
+    Cluster access: native API for reads and built-in actions (incl. Flux/Argo CD
+    patches); kubectl only for interactive exec/edit/attach/cp/port-forward.
+    Config: layered config with per-cluster/per-context overrides (config.rs).
+    Plugins: external adapter processes, JSON over stdin/stdout, reviewed
+    catalogs.
+    Testing: no cluster; Cluster::fake() + apply(&mut app, json!(...)).
+    User-visible behaviour is tested through handle_key.
+    Keep in sync: new keys/commands with docs/keys.md, the ? help in ui.rs and
+    docs/features.md; new config fields with docs/configuration.md; the enter
+    match in app/navigation.rs with views::BUILTIN_DRILLS.
+    Process: AGENTS.md governs. Features need an agreed GitHub Discussion
+    first; bug fixes do not. Conventional commits. CI: cargo fmt, clippy -D
+    warnings, cargo test (all --locked). Never bump the version in a feature PR.
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always include a "Non-goals" section
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
+
+# Per-operation guidance (optional)
+# Add advisory guidance for how apply and archive work should be conducted.
+# This is separate from artifact rules above.
+# Example:
+#   operations:
+#     apply:
+#       guidance:
+#         - Keep test summaries concise
+#     archive:
+#       guidance:
+#         - Summarize the archive outcome before finishing

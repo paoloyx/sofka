@@ -7,7 +7,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
     Block, BorderType, Borders, Clear, Gauge, HighlightSpacing, List, ListItem, ListState,
-    Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Sparkline,
+    Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Sparkline, Wrap,
 };
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -228,7 +228,7 @@ fn draw_base(frame: &mut Frame, app: &mut App) {
     let needs_prompt = matches!(
         app.mode,
         Mode::Command | Mode::Filter | Mode::LogFilter | Mode::DocFilter
-    );
+    ) || (app.mode == Mode::Sveltos && app.sveltos.filter_editing);
 
     // Fullscreen logs (F): the pane takes the whole frame — no header, status
     // line, or crumbs — so terminal text selection copies clean lines. The
@@ -382,6 +382,7 @@ fn draw_base(frame: &mut Frame, app: &mut App) {
         },
         Mode::Help => draw_help(frame, app, chunks[1]),
         Mode::Pulse => draw_pulse(frame, app, chunks[1]),
+        Mode::Sveltos => draw_sveltos(frame, app, chunks[1]),
         Mode::Xray => draw_xray(frame, app, chunks[1]),
         Mode::Rbac => draw_rbac(frame, app, chunks[1]),
         Mode::Explain => draw_explain(frame, app, chunks[1]),
@@ -443,6 +444,7 @@ fn draw_base(frame: &mut Frame, app: &mut App) {
             Mode::Logs => draw_logs(frame, app, chunks[1]),
             Mode::Help => draw_help(frame, app, chunks[1]),
             Mode::Pulse => draw_pulse(frame, app, chunks[1]),
+            Mode::Sveltos => draw_sveltos(frame, app, chunks[1]),
             Mode::Xray => draw_xray(frame, app, chunks[1]),
             Mode::Rbac => draw_rbac(frame, app, chunks[1]),
             Mode::Explain => draw_explain(frame, app, chunks[1]),
@@ -574,15 +576,23 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Min(30), Constraint::Length(logo_width)])
         .split(area);
 
-    let ns = if app.all_namespaces() {
+    let dashboard = app.mode == Mode::Sveltos
+        || (app.mode == Mode::Command && app.palette_return == Mode::Sveltos)
+        || (app.mode == Mode::Help && app.help_return == Mode::Sveltos);
+    let ns = if dashboard {
+        "<management · all>".to_string()
+    } else if app.all_namespaces() {
         "<all>".to_string()
     } else {
         app.namespace_label()
     };
-    let mut kind = app.resource_title();
-    if let Some(layout) = app.active_layout() {
-        kind = format!("{kind}:{layout}");
-    }
+    let mut kind = if dashboard {
+        "Sveltos".to_owned()
+    } else if let Some(layout) = app.active_layout() {
+        format!("{}:{layout}", app.resource_title())
+    } else {
+        app.resource_title()
+    };
     if let Some(scope) = &app.scope_label {
         kind = format!("{kind}  ‹ {scope}");
     }
@@ -779,17 +789,25 @@ const COMPACT_SYNC_WIDTH: u16 = 10;
 /// the right. Everything the full header shows that still matters when you've
 /// traded it for screen space.
 fn draw_compact_header(frame: &mut Frame, app: &App, area: Rect) {
-    let ns = if app.all_namespaces() {
+    let dashboard = app.mode == Mode::Sveltos
+        || (app.mode == Mode::Command && app.palette_return == Mode::Sveltos)
+        || (app.mode == Mode::Help && app.help_return == Mode::Sveltos);
+    let ns = if dashboard {
+        "<management · all>".to_string()
+    } else if app.all_namespaces() {
         "<all>".to_string()
     } else if app.namespace.is_empty() {
         "<none>".to_string()
     } else {
         app.namespace_label()
     };
-    let mut kind = app.resource_title();
-    if let Some(layout) = app.active_layout() {
-        kind = format!("{kind}:{layout}");
-    }
+    let mut kind = if dashboard {
+        "Sveltos".to_owned()
+    } else if let Some(layout) = app.active_layout() {
+        format!("{}:{layout}", app.resource_title())
+    } else {
+        app.resource_title()
+    };
     if let Some(scope) = &app.scope_label {
         kind = format!("{kind} ‹ {scope}");
     }
@@ -854,7 +872,9 @@ fn draw_compact_header(frame: &mut Frame, app: &App, area: Rect) {
         ));
     }
 
-    let (synced, sync_color) = if app.refresh_task.is_some() {
+    let (synced, sync_color) = if app.mode == Mode::Sveltos && app.sveltos.refreshing {
+        ("● reading", theme::sky())
+    } else if app.refresh_task.is_some() {
         ("● refresh", theme::sky())
     } else if app.resource_refresh_available() {
         ("○ stopped", theme::overlay1())
@@ -970,6 +990,7 @@ fn header_hints(app: &App) -> Vec<Line<'static>> {
             | Mode::DocFilter
             | Mode::Help
             | Mode::Pulse
+            | Mode::Sveltos
             | Mode::Xray
             | Mode::Explain
             | Mode::Timeline
@@ -3383,6 +3404,10 @@ fn build_help(app: &App, width: usize) -> (Vec<Line<'static>>, String, HelpSecti
     lines.push(bind(
         ":ctx · :pulse",
         "switch context (launch: sofka ctx) · cluster-health dashboard",
+    ));
+    lines.push(bind(
+        ":sveltos",
+        "read-only Sveltos deployment evidence in the management context",
     ));
     lines.push(bind(
         ":fleet",
@@ -6048,6 +6073,112 @@ fn draw_pulse(frame: &mut Frame, app: &App, area: Rect) {
     counts_tile(frame, bot[2], p);
 }
 
+fn draw_sveltos(frame: &mut Frame, app: &mut App, area: Rect) {
+    use ratatui::widgets::{Cell, Row, Table, TableState};
+    let sveltos = &app.sveltos;
+    let mut heading = vec![Line::from(Span::styled(
+        format!(" {} ", sveltos.display_title()),
+        theme::title(),
+    ))];
+    if let Some(warning) = &sveltos.warning {
+        heading.push(Line::from(Span::styled(
+            format!("INCOMPLETE: {warning}"),
+            Style::default().fg(theme::yellow()),
+        )));
+    }
+    heading.extend(
+        sveltos
+            .status_lines()
+            .into_iter()
+            .chain(sveltos.context_lines())
+            .map(|line| Line::from(Span::styled(line, theme::dim()))),
+    );
+    let width = usize::from(area.width.max(1));
+    let header_height = heading
+        .iter()
+        .map(|line| line.width().div_ceil(width).max(1))
+        .sum::<usize>()
+        .min(usize::from(area.height / 2)) as u16;
+    let [header_area, body] =
+        Layout::vertical([Constraint::Length(header_height), Constraint::Min(0)]).areas(area);
+    frame.render_widget(
+        Paragraph::new(heading).wrap(Wrap { trim: true }),
+        header_area,
+    );
+    let block = |title: String| {
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(theme::border_focused())
+            .title(title)
+    };
+
+    let detail = sveltos.detail_lines();
+    let table_area = if detail.is_empty() {
+        body
+    } else {
+        let [detail_area, table_area] =
+            Layout::vertical([Constraint::Percentage(60), Constraint::Min(0)]).areas(body);
+        frame.render_widget(
+            Paragraph::new(detail.join("\n"))
+                .scroll((sveltos.detail_scroll(), 0))
+                .wrap(Wrap { trim: false })
+                .block(block(" Evidence ".into())),
+            detail_area,
+        );
+        table_area
+    };
+
+    let (headings, rows) = sveltos.table_data();
+    let widths = if headings.len() == 1 {
+        vec![Constraint::Fill(1)]
+    } else {
+        headings
+            .iter()
+            .enumerate()
+            .map(|(column, heading)| {
+                let widest = rows
+                    .iter()
+                    .filter_map(|cells| cells.get(column))
+                    .map(|cell| cell.width())
+                    .max()
+                    .unwrap_or(0);
+                Constraint::Length(widest.max(heading.width()).min(48) as u16)
+            })
+            .collect()
+    };
+    let count = rows.len();
+    let mut table_rows = rows
+        .into_iter()
+        .map(|cells| Row::new(cells.into_iter().map(Cell::from)).style(theme::text()))
+        .collect::<Vec<_>>();
+    if table_rows.is_empty() {
+        let placeholder = if sveltos.refreshing && sveltos.last_success.is_none() {
+            "reading…"
+        } else if sveltos.filter().is_empty() {
+            "nothing reported"
+        } else {
+            "no rows match the filter"
+        };
+        table_rows.push(Row::new([Cell::from(placeholder)]).style(theme::dim()));
+    }
+    let title = match sveltos.filter() {
+        "" => format!(" {count} "),
+        filter => format!(" {count} · /{filter} "),
+    };
+    let mut state = TableState::default().with_selected((count > 0).then_some(sveltos.selected()));
+    frame.render_stateful_widget(
+        Table::new(table_rows, widths)
+            .header(Row::new(headings).style(theme::header_row()))
+            .row_highlight_style(theme::selected_row())
+            .highlight_symbol("▌ ")
+            .highlight_spacing(HighlightSpacing::Always)
+            .block(block(title)),
+        table_area,
+        &mut state,
+    );
+}
+
 fn gauge_tile(frame: &mut Frame, area: Rect, label: &str, ready: usize, total: usize) {
     let ratio = if total == 0 {
         1.0
@@ -6254,6 +6385,21 @@ fn navigation_hint(app: &App, width: u16) -> Line<'static> {
             Action::Rename,
             Action::FleetMark,
         ][..],
+        "sveltos" => &[
+            Action::Back,
+            Action::Up,
+            Action::Down,
+            Action::First,
+            Action::Last,
+            Action::PageUp,
+            Action::PageDown,
+            Action::NextView,
+            Action::PreviousView,
+            Action::Accept,
+            Action::Yaml,
+            Action::Refresh,
+            Action::Filter,
+        ][..],
         _ => &[
             Action::Back,
             Action::Up,
@@ -6294,6 +6440,14 @@ fn draw_prompt(frame: &mut Frame, app: &App, area: Rect) {
             ),
             Span::styled(app.command.clone(), Style::default().fg(theme::text())),
             Span::styled("█", Style::default().fg(theme::mauve())),
+        ]),
+        Mode::Sveltos if app.sveltos.filter_editing => Line::from(vec![
+            Span::styled("/", Style::default().fg(theme::teal())),
+            Span::styled(
+                app.sveltos.filter_draft.clone(),
+                Style::default().fg(theme::text()),
+            ),
+            Span::styled("█", Style::default().fg(theme::teal())),
         ]),
         Mode::Filter => {
             let mut spans = vec![
@@ -6379,7 +6533,7 @@ fn sync_indicator(
     polling: bool,
 ) -> (&'static str, Color) {
     let static_doc = match mode {
-        Mode::Detail | Mode::Diff | Mode::Explain => true,
+        Mode::Detail | Mode::Diff | Mode::Explain | Mode::Sveltos => true,
         // A directory listing is fetched once by exec, not watched — `r`
         // re-reads it. Calling it live would be a lie.
         Mode::PvcExplore | Mode::Dir => true,
@@ -6404,7 +6558,9 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         Style::default().fg(theme::subtext0())
     };
-    let (synced, sync_color) = if app.refresh_task.is_some() {
+    let (synced, sync_color) = if app.mode == Mode::Sveltos && app.sveltos.refreshing {
+        ("● reading", theme::sky())
+    } else if app.refresh_task.is_some() {
         ("● refresh", theme::sky())
     } else if app.resource_refresh_available() {
         ("○ stopped", theme::overlay1())
@@ -6801,6 +6957,64 @@ mod tests {
         assert!(clipped.ends_with('…'));
         // No room even for the ellipsis.
         assert_eq!(clip_to_width("abc", 0), "");
+    }
+
+    #[tokio::test]
+    async fn sveltos_tabs_and_incomplete_warning_render_narrowly() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(16);
+        let mut cluster = crate::k8s::Cluster::fake();
+        cluster.register_kind(
+            "config.projectsveltos.io",
+            "ClusterProfile",
+            "clusterprofiles",
+            false,
+        );
+        let mut app = App::new(cluster, tx);
+        app.open_sveltos();
+        app.sveltos.warning = Some("CAPI Cluster: forbidden".into());
+        let mut terminal = Terminal::new(TestBackend::new(40, 16)).unwrap();
+
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let rendered = (0..16)
+            .map(|y| {
+                (0..40)
+                    .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Sveltos · Clusters"));
+        assert!(rendered.contains("INCOMPLETE:"));
+
+        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(app.sveltos.display_title(), "Sveltos · Profiles");
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let rendered = (0..16)
+            .map(|y| {
+                (0..40)
+                    .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Sveltos · Profiles"));
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(app.mode, Mode::Help);
+        let (lines, _, _) = build_help(&app, 118);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.to_string().contains(":sveltos"))
+        );
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(app.mode, Mode::Sveltos);
     }
 
     #[tokio::test]

@@ -51,6 +51,7 @@ pub mod snapshot;
 pub mod sortmem;
 pub mod state_writer;
 pub mod store;
+pub mod sveltos;
 pub mod terminal;
 pub mod text;
 pub mod theme;

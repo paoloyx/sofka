@@ -15,6 +15,7 @@ impl App {
             Mode::Xray => Mode::Xray,
             Mode::Explain => Mode::Explain,
             Mode::Adjacent => Mode::Adjacent,
+            Mode::Sveltos => Mode::Sveltos,
             _ => Mode::Table,
         };
         // Remember the selected row so we can land back on it.

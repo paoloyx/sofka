@@ -349,7 +349,7 @@ include those conditions. Row filters can search the route paths.
   view history.
 - **Command palette** (`:`) - fuzzy search over the full resource catalog, your
   saved bookmarks and workspaces, and the built-in commands (`ctx`, `helm`,
-  `workloads`, `ns-resources`, `pulse`, `xray`, `explain`, `timeline`, `gitops`, `argocd`, `adjacent`, `users`, `groups`, `policy`, `can-i`, `journal`,
+  `workloads`, `ns-resources`, `pulse`, `sveltos`, `xray`, `explain`, `timeline`, `gitops`, `argocd`, `adjacent`, `users`, `groups`, `policy`, `can-i`, `journal`,
   `debug`,
   `debug-clean`, `bundle`, `bundle-save`, `snapshot`, `snapshots`, `diff`,
   `events`, `pf`, `notify`, `find`, `vlogs`, `rightsize`, `fleet`, `skin`,
@@ -599,6 +599,36 @@ include those conditions. Row filters can search the route paths.
   table; keys, commands, and plugins that act on objects are disabled on these
   rows, while `target = "context"` plugins still run.
 - **Pulse dashboard** (`:pulse`) - cluster-health tiles, refreshed every 5s.
+- **Sveltos dashboard** (`:sveltos`) - read-only deployment evidence
+  from the connected management context, based on the Sveltos v1.16.0 API
+  contract. Reads include SveltosCluster, CAPI Cluster when served,
+  ClusterProfile, Profile, ClusterSummary, and ClusterConfiguration.
+  Clusters and Profiles tabs open related deployments and their shared detail.
+  The dashboard uses controller-reported matching and rollout status, feature
+  provisioning reports, and reported inventory; it does not re-evaluate
+  selectors or infer that an old `Provisioned` state means the latest profile
+  was applied.
+
+  Reads cover the management cluster across namespaces. They never read Secret
+  contents, mutate resources, or connect to downstream clusters. Refresh with
+  `r`; automatic refresh starts five seconds after each gather completes.
+  `/` filters locally with a case-insensitive substring over displayed fields;
+  this is not the resource table's structured filter grammar. `Tab` and
+  `Shift-Tab` switch overview tabs; `Enter` drills in, `Esc` goes back and `q`
+  closes. `y` opens YAML for a selected management-cluster source object when
+  available.
+
+  Reads paginate at 500 objects and are bounded to four concurrent requests,
+  five seconds per request, thirty seconds per gather, 200 list requests, and
+  20,000 objects per gather. Reaching a limit retains collected evidence and
+  marks affected sources incomplete. Snapshots across resource kinds are not
+  atomic.
+  Failed, denied, timed-out, malformed, or truncated reads leave available
+  evidence visible and mark affected data incomplete or stale with its last
+  successful read time. Missing evidence is not treated as empty, zero, or
+  healthy. Reported provisioning, Helm ownership, and inventory do not verify
+  downstream workload runtime health or connectivity.
+
 - **Xray tree** (`:xray`) - a hierarchical view from the current kind down
   through owner references to pods and containers.
 - **RBAC subjects and rules**: `:users` and `:groups` list subjects from

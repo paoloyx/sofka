@@ -32,6 +32,7 @@ mod rollout;
 mod save;
 mod scale;
 mod server_table;
+mod sveltos;
 mod synchronized_output;
 mod update;
 mod watch_status;
@@ -1657,6 +1658,45 @@ async fn palette_command_dispatch() {
     assert!(app.run_palette_command("contexts")); // alias resolves
     assert!(!app.run_palette_command("pods")); // resource kind, not a command
     assert!(!app.run_palette_command("")); // empty is never a command
+}
+
+#[tokio::test]
+async fn sveltos_command_requires_api_and_opens_without_resource_selection() {
+    let (mut app, _rx) = test_app();
+    app.handle_key(press(KeyCode::Char(':'))).unwrap();
+    for character in "sveltos".chars() {
+        app.handle_key(press(KeyCode::Char(character))).unwrap();
+    }
+    app.handle_key(press(KeyCode::Enter)).unwrap();
+    assert_eq!(app.mode, Mode::Table);
+    assert!(app.flash.contains("Sveltos APIs unavailable"));
+
+    let (tx, _rx) = mpsc::channel(1024);
+    let mut cluster = Cluster::fake();
+    cluster.register_kind(
+        "config.projectsveltos.io",
+        "ClusterProfile",
+        "clusterprofiles",
+        false,
+    );
+    let mut app = App::new(cluster, tx);
+    app.handle_key(press(KeyCode::Char(':'))).unwrap();
+    for character in "sveltos".chars() {
+        app.handle_key(press(KeyCode::Char(character))).unwrap();
+    }
+    app.handle_key(press(KeyCode::Enter)).unwrap();
+    assert_eq!(app.mode, Mode::Sveltos);
+    assert_eq!(app.sveltos.display_title(), "Sveltos · Clusters");
+    app.handle_key(press(KeyCode::Char(':'))).unwrap();
+    assert_eq!(app.mode, Mode::Command);
+    app.handle_key(press(KeyCode::Esc)).unwrap();
+    assert_eq!(app.mode, Mode::Sveltos);
+    app.handle_key(press(KeyCode::Char('?'))).unwrap();
+    assert_eq!(app.mode, Mode::Help);
+    app.handle_key(press(KeyCode::Esc)).unwrap();
+    assert_eq!(app.mode, Mode::Sveltos);
+    app.handle_key(press(KeyCode::Char('q'))).unwrap();
+    assert_eq!(app.mode, Mode::Table);
 }
 
 #[tokio::test]
@@ -35736,6 +35776,34 @@ fn key_action_fixture(scope: &str) -> (App, Receiver<Msg>) {
         "pvc_explore" => Mode::PvcExplore,
         "dir" => Mode::Dir,
         "port_forward_picker" => Mode::PortForwardPicker,
+        "sveltos" => {
+            app.cluster.register_kind(
+                "config.projectsveltos.io",
+                "ClusterProfile",
+                "clusterprofiles",
+                false,
+            );
+            app.open_sveltos();
+            let clusters = (0..12)
+                .map(|n| {
+                    json!({"apiVersion":"lib.projectsveltos.io/v1beta1", "kind":"SveltosCluster",
+                    "metadata":{"name":format!("c{n:02}"), "namespace":"default"}})
+                })
+                .collect();
+            app.handle_msg(Msg::SveltosData {
+                generation: app.generation,
+                request: app.sveltos_request,
+                reads: vec![super::sveltos::SourceResult {
+                    kind: crate::sveltos::SourceKind::SveltosCluster,
+                    objects: clusters,
+                    read: crate::sveltos::SourceRead::available("now"),
+                }],
+            });
+            for _ in 0..4 {
+                app.handle_key(press(KeyCode::Char('j'))).unwrap();
+            }
+            Mode::Sveltos
+        }
         "plugin_form" => {
             let mut plugin = named_plugin("echo", &[]);
             plugin.inputs = toml::from_str(
@@ -35804,6 +35872,12 @@ fn key_action_state(app: &App) -> serde_json::Value {
             app.gitops_state.selected(), app.adjacent_state.selected(), app.find_state.selected(),
             app.fleet_state.selected(), app.snapshot_state.selected(), app.skin_state.selected(),
             app.flux_menu_state.selected(), app.transfer_menu_state.selected(), app.pf_state.selected()],
+        "sveltos": {
+            "title": app.sveltos.display_title(), "selected": app.sveltos.selected(),
+            "rows": app.sveltos.display_rows(), "scroll": app.sveltos.detail_scroll(),
+            "filter_editing": app.sveltos.filter_editing, "filter_draft": app.sveltos.filter_draft,
+            "request": app.sveltos_request,
+        },
     })
 }
 

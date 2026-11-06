@@ -148,6 +148,15 @@ pub enum Msg {
         claim: StatusClaim,
         update: crate::app::ns_resources::Update,
     },
+    SveltosData {
+        generation: u64,
+        request: u64,
+        reads: Vec<crate::app::sveltos::SourceResult>,
+    },
+    SveltosPoll {
+        generation: u64,
+        request: u64,
+    },
     XrayData {
         generation: u64,
         claim: StatusClaim,

@@ -116,6 +116,41 @@ ownership scope are cleared. Startup still uses the configured default resource.
 | `?`                                                          | help                                                                                                                                                                                                                  |
 | _(config)_                                                   | plugin / bookmark / workspace key chords — `ctrl-`/`alt-`/`shift-`/`fN`; listed in `?` help                                                                                                                           |
 
+## Sveltos dashboard (`:sveltos`)
+
+`:sveltos` opens a read-only dashboard for the connected management context,
+across all namespaces. Compatibility baseline is Sveltos v1.16.0. It reads only
+SveltosCluster, CAPI Cluster, ClusterProfile, Profile, ClusterSummary, and
+ClusterConfiguration from that management context. It never reads Secret
+contents, switches context, connects to downstream clusters, or issues
+mutations.
+
+- `Tab` / `Shift-Tab` switch between Clusters and Profiles on the overview.
+- `j` / `k`, `↓` / `↑` move through the current list; `g` / `G` go to its
+  first/last row, and `PgDn` / `PgUp` page through it.
+- `Enter` opens related deployments or deployment detail.
+- `/` edits a local, case-insensitive substring filter over displayed fields.
+  It matches displayed name, namespace, kind/type, and state; it does not use
+  the resource table's selector grammar or issue API requests. `Enter` applies
+  it; `Esc` cancels editing.
+- `r` refreshes; the dashboard also refreshes every five seconds after each
+  gather completes.
+- `y` inspects selected management-cluster source YAML, when available.
+- `Esc` goes back one level; `q` closes the dashboard.
+- `:` and `?` open the command palette and help, then return to the same
+  dashboard state.
+
+Reads paginate at 500 objects and are bounded to four concurrent requests,
+five seconds per request, thirty seconds per gather, 200 list requests, and
+20,000 objects per gather. Reaching a limit retains collected evidence and
+marks affected sources incomplete.
+
+Readable results remain available when a source read is incomplete or stale.
+The dashboard shows source warnings and freshness; missing data is not a zero or
+a healthy result. Its snapshots are not atomic. Provisioning and inventory are
+reported Sveltos evidence, not verification of downstream workload runtime
+health or proof that the latest profile configuration has been applied.
+
 Shift+Arrow selects a range in the visible row order. Reversing direction reduces
 the range and keeps separate marks made with `space`. Other keys end the range
 operation. Normal movement keeps marked rows. Filtering, sorting, view changes,
