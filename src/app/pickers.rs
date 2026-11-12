@@ -6,6 +6,7 @@ const MAX_RECENT_NAMESPACES: usize = 8;
 /// The sort picker's pinned first entry: clears the sort back to the default
 /// (namespace, name) ordering.
 pub const DEFAULT_SORT_LABEL: &str = "default (ns/name)";
+pub const KARPENTER_SORT_LABEL: &str = "severity (default)";
 
 impl App {
     /// Open the switcher on the active namespace, then fetch the namespace list.
@@ -229,7 +230,7 @@ impl App {
     /// first; column headers are fuzzy-matched against the type-to-filter
     /// buffer (see `filtered_namespaces` for the same pattern).
     pub fn filtered_sort_entries(&self) -> Rc<Vec<String>> {
-        let headers = self.display_headers();
+        let headers = self.sort_picker_headers();
         if let Some(m) = self.picker_memos.borrow().sort_entries.as_ref()
             && m.filter == self.sort_picker_filter
             && Rc::ptr_eq(&m.headers, &headers)
@@ -237,7 +238,7 @@ impl App {
             return Rc::clone(&m.value);
         }
 
-        let mut out = vec![DEFAULT_SORT_LABEL.to_string()];
+        let mut out = vec![self.sort_default_label().to_string()];
         if self.sort_picker_filter.is_empty() {
             out.extend(headers.iter().cloned());
             return self.remember_sort_entries(headers, out);
@@ -275,7 +276,7 @@ impl App {
             (Some(Action::Back), _) => {
                 // First esc clears the filter, second closes the picker.
                 if self.sort_picker_filter.is_empty() {
-                    self.mode = Mode::Table;
+                    self.close_sort_picker();
                 } else {
                     self.sort_picker_filter.clear();
                     self.select_best_sort_match();
@@ -321,7 +322,11 @@ impl App {
     /// cursor while browsing — see `select_best_namespace_match`).
     fn select_best_sort_match(&mut self) {
         let idx = if self.sort_picker_filter.is_empty() {
-            self.sort_column.map_or(0, |i| i + 1)
+            if self.sort_picker_karpenter {
+                self.karpenter_sort[self.karpenter_tab].0
+            } else {
+                self.sort_column.map_or(0, |i| i + 1)
+            }
         } else if self.filtered_sort_entries().len() > 1 {
             1 // right after the pinned default — the top-scored column
         } else {
@@ -331,19 +336,73 @@ impl App {
     }
 
     pub(super) fn sort_by_age(&mut self) {
-        if !self.display_headers().iter().any(|h| h == "AGE") {
+        self.sort_picker_karpenter = self.mode == Mode::Karpenter;
+        if !self.sort_picker_headers().iter().any(|h| h == "AGE") {
+            self.sort_picker_karpenter = false;
             self.flash_warn("view has no AGE column");
             return;
         }
         self.apply_sort_choice("AGE");
     }
 
+    /// Headers the sort picker offers: the Karpenter tab's or the table's.
+    fn sort_picker_headers(&self) -> Rc<[String]> {
+        if self.sort_picker_karpenter {
+            let h = crate::karpenter::TABS[self.karpenter_tab].1;
+            h.iter().map(|h| h.to_string()).collect()
+        } else {
+            self.display_headers()
+        }
+    }
+
+    pub fn sort_default_label(&self) -> &'static str {
+        if self.sort_picker_karpenter {
+            KARPENTER_SORT_LABEL
+        } else {
+            DEFAULT_SORT_LABEL
+        }
+    }
+
+    /// Active sort column header and direction, marked in the picker.
+    pub fn sort_picker_active(&self) -> Option<(String, bool)> {
+        let (col, desc) = if self.sort_picker_karpenter {
+            let (c, d) = self.karpenter_sort[self.karpenter_tab];
+            (c.checked_sub(1)?, d)
+        } else {
+            (self.sort_column?, self.sort_desc)
+        };
+        self.sort_picker_headers()
+            .get(col)
+            .map(|h| (h.clone(), desc))
+    }
+
+    fn close_sort_picker(&mut self) {
+        self.mode = if std::mem::take(&mut self.sort_picker_karpenter) {
+            Mode::Karpenter
+        } else {
+            Mode::Table
+        };
+    }
+
     /// Sort by a picked entry: the default entry clears the sort, a new column
     /// sorts ascending, and re-picking the active column toggles direction
     /// (the spreadsheet idiom).
     fn apply_sort_choice(&mut self, entry: &str) {
-        self.mode = Mode::Table;
         self.sort_picker_filter.clear();
+        if self.sort_picker_karpenter {
+            let t = self.karpenter_tab;
+            let col = self
+                .sort_picker_headers()
+                .iter()
+                .position(|h| h == entry)
+                .map_or(0, |i| i + 1);
+            let (cur, desc) = self.karpenter_sort[t];
+            self.karpenter_sort[t] = (col, cur == col && !desc);
+            self.close_sort_picker();
+            self.karpenter_reselect();
+            return;
+        }
+        self.mode = Mode::Table;
         if entry == DEFAULT_SORT_LABEL {
             self.reset_sort();
             self.remember_sort();

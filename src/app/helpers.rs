@@ -1088,8 +1088,23 @@ pub(super) async fn list_kind(
     namespaced: bool,
     ns: &str,
 ) -> Result<Vec<DynamicObject>, String> {
+    list_kind_fields(client, ar, namespaced, ns, "").await
+}
+
+/// [`list_kind`] narrowed server-side by a field selector (empty: none).
+pub(super) async fn list_kind_fields(
+    client: &Client,
+    ar: &ApiResource,
+    namespaced: bool,
+    ns: &str,
+    fields: &str,
+) -> Result<Vec<DynamicObject>, String> {
     let api = crate::k8s::dynamic_api(client.clone(), ar, namespaced, ns);
-    api.list(&ListParams::default())
+    let mut params = ListParams::default();
+    if !fields.is_empty() {
+        params = params.fields(fields);
+    }
+    api.list(&params)
         .await
         .map(|l| l.items)
         .map_err(|e| format!("listing {}: {e}", ar.plural))

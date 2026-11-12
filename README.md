@@ -233,6 +233,7 @@ be read-only in a light skin while everything else stays as is. See the
 | [Plugins](docs/plugins.md)                     | plugins, bookmarks, workspaces, saved forwards              |
 | [Safety](docs/safety.md)                       | read-only mode, guardrails, `:can-i`, action journal        |
 | [Providers](docs/providers.md)                 | right-sizing, VictoriaLogs, fleet dashboard                 |
+| [Karpenter](docs/karpenter.md)                 | pools, claims, pending pods, disruption state               |
 | [Debugging](docs/debugging.md)                 | explain, timeline, diff, notifications, debug pods, bundles |
 | [Architecture](docs/architecture.md)           | module layout, data flow, dev loop, release process         |
 

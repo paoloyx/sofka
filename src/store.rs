@@ -137,6 +137,12 @@ pub enum Msg {
         generation: u64,
         error: String,
     },
+    KarpenterData {
+        generation: u64,
+        claim: StatusClaim,
+        items: crate::karpenter::Report,
+        warn: Option<String>,
+    },
     PulseData {
         generation: u64,
         claim: StatusClaim,

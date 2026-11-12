@@ -44,6 +44,7 @@ impl App {
             // dialog raised from the PVC browser, which returns there. Getting
             // this wrong reads as "left the view" and stops a running plugin.
             Mode::Confirm | Mode::Prompt | Mode::PluginForm => self.overlay_return(),
+            Mode::SortPicker if self.sort_picker_karpenter => Mode::Karpenter,
             Mode::Filter | Mode::SortPicker | Mode::CopyPicker => Mode::Table,
             other => other,
         };
@@ -238,6 +239,7 @@ impl App {
             Mode::Confirm => self.key_confirm(key),
             Mode::Prompt => self.key_prompt(key),
             Mode::Pulse => self.key_pulse(key),
+            Mode::Karpenter => self.key_karpenter(key),
             Mode::Xray => self.key_xray(key),
             Mode::Rbac => self.key_rbac(key),
             Mode::Explain => self.key_explain(key),
@@ -288,6 +290,7 @@ impl App {
     pub(crate) fn scope_for(&self, mode: Mode) -> &'static str {
         match mode {
             Mode::Contexts if self.ctx_filtering => "context_filter",
+            Mode::Karpenter if self.karpenter_filtering => "filter",
             Mode::Table => "table",
             Mode::Command => "command",
             Mode::Filter => "filter",
@@ -308,6 +311,7 @@ impl App {
             Mode::Confirm => "confirm",
             Mode::Prompt => "prompt",
             Mode::Pulse => "pulse",
+            Mode::Karpenter => "karpenter",
             Mode::Xray => "xray",
             Mode::Rbac => "rbac",
             Mode::Explain => "explain",
@@ -440,6 +444,9 @@ impl App {
                     self.sync_filter_selectors();
                     self.save_history_filter();
                     self.reselect_after_filter(selected);
+                } else if self.karpenter_return == Some(self.stack.len()) {
+                    self.pop_frame();
+                    self.resume_karpenter();
                 } else if !self.pop_frame()
                     && let Some(back) = self.argocd_return.take()
                 {
@@ -908,6 +915,7 @@ impl App {
             }
             PaletteAction::Ctx => self.open_contexts(),
             PaletteAction::Pulse => self.open_pulse(),
+            PaletteAction::Karpenter => self.open_karpenter(),
             PaletteAction::Xray => self.open_xray(),
             PaletteAction::Explain => self.open_explain(),
             PaletteAction::Timeline => self.open_timeline(),

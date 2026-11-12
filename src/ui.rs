@@ -12,7 +12,7 @@ use ratatui::widgets::{
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::{App, DEFAULT_SORT_LABEL, Mode, Pane, SuggestKind, TRANSFER_MENU_ITEMS};
+use crate::app::{App, Mode, Pane, SuggestKind, TRANSFER_MENU_ITEMS};
 use crate::{columns, theme};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -356,6 +356,7 @@ fn draw_base(frame: &mut Frame, app: &mut App) {
             theme::peach(),
         ),
         Mode::Logs | Mode::LogFilter => draw_logs(frame, app, chunks[1]),
+        Mode::SortPicker if app.sort_picker_karpenter => draw_karpenter(frame, app, chunks[1]),
         // The lookback prompt opens from the logs view — keep it underneath.
         Mode::Prompt if app.prompt_over_logs() => draw_logs(frame, app, chunks[1]),
         // While typing a doc search, keep drawing the view it was opened from
@@ -382,6 +383,7 @@ fn draw_base(frame: &mut Frame, app: &mut App) {
         },
         Mode::Help => draw_help(frame, app, chunks[1]),
         Mode::Pulse => draw_pulse(frame, app, chunks[1]),
+        Mode::Karpenter => draw_karpenter(frame, app, chunks[1]),
         Mode::Xray => draw_xray(frame, app, chunks[1]),
         Mode::Rbac => draw_rbac(frame, app, chunks[1]),
         Mode::Explain => draw_explain(frame, app, chunks[1]),
@@ -443,6 +445,7 @@ fn draw_base(frame: &mut Frame, app: &mut App) {
             Mode::Logs => draw_logs(frame, app, chunks[1]),
             Mode::Help => draw_help(frame, app, chunks[1]),
             Mode::Pulse => draw_pulse(frame, app, chunks[1]),
+            Mode::Karpenter => draw_karpenter(frame, app, chunks[1]),
             Mode::Xray => draw_xray(frame, app, chunks[1]),
             Mode::Rbac => draw_rbac(frame, app, chunks[1]),
             Mode::Explain => draw_explain(frame, app, chunks[1]),
@@ -970,6 +973,7 @@ fn header_hints(app: &App) -> Vec<Line<'static>> {
             | Mode::DocFilter
             | Mode::Help
             | Mode::Pulse
+            | Mode::Karpenter
             | Mode::Xray
             | Mode::Explain
             | Mode::Timeline
@@ -3470,6 +3474,10 @@ fn build_help(app: &App, width: usize) -> (Vec<Line<'static>>, String, HelpSecti
         "switch context (launch: sofka ctx) · cluster-health dashboard",
     ));
     lines.push(bind(
+        ":karpenter · :kpt",
+        "Karpenter pools vs limits, blocked disruption, pending pods (⏎ drills)",
+    ));
+    lines.push(bind(
         ":fleet",
         "cross-context health dashboard for configured contexts",
     ));
@@ -4045,17 +4053,13 @@ fn draw_contexts(frame: &mut Frame, app: &mut App, area: Rect) {
 /// The active sort is marked with its direction arrow in the sorter color.
 fn draw_sort_picker(frame: &mut Frame, app: &mut App, area: Rect) {
     let show_scrollbars = app.scrollbars_visible();
-    let active = app.sort_column.and_then(|i| {
-        app.display_headers()
-            .get(i)
-            .cloned()
-            .map(|h| (h, app.sort_desc))
-    });
+    let active = app.sort_picker_active();
+    let default = app.sort_default_label();
     let items: Vec<Text> = app
         .filtered_sort_entries()
         .iter()
         .map(|e| {
-            if e == DEFAULT_SORT_LABEL {
+            if e == default {
                 return Text::from(Span::styled(e.clone(), Style::default().fg(theme::teal())));
             }
             match &active {
@@ -5835,6 +5839,296 @@ fn draw_argocd(frame: &mut Frame, app: &mut App, area: Rect) {
     );
 }
 
+fn draw_karpenter(frame: &mut Frame, app: &mut App, area: Rect) {
+    use crate::explain::Level;
+    let color = |l: Level| match l {
+        Level::Good => theme::green(),
+        Level::Warn => theme::peach(),
+        Level::Critical => theme::red(),
+        _ => theme::text(),
+    };
+    let marker = |l: Level| match l {
+        Level::Good => "●",
+        Level::Info => "○",
+        _ => "▲",
+    };
+    let status = if app.karpenter_loading {
+        "refreshing…".to_string()
+    } else {
+        app.karpenter_updated
+            .as_ref()
+            .map_or_else(String::new, |t| format!("updated {t}"))
+    };
+    let mut legend = Vec::new();
+    for (l, label) in [
+        (Level::Good, "ok"),
+        (Level::Info, "info"),
+        (Level::Warn, "warn"),
+        (Level::Critical, "critical"),
+    ] {
+        legend.push(Span::styled(
+            format!(" {}", marker(l)),
+            Style::default().fg(color(l)),
+        ));
+        legend.push(Span::styled(format!(" {label}"), theme::dim()));
+    }
+    legend.push(Span::raw(" "));
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(theme::border())
+        .title(Line::from(karpenter_breadcrumb(app, &status)))
+        .title_top(Line::from(legend).right_aligned());
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let [tabs, table_area, detail_area] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(3),
+        Constraint::Length(7),
+    ])
+    .areas(inner);
+
+    let shown = app.karpenter_rows().len();
+    let k = &app.karpenter;
+    let count = |t: usize| k.tabs[t].len();
+    let pools_worst = k.tabs[0].iter().map(|r| r.level).max_by_key(|l| match l {
+        Level::Critical => 2,
+        Level::Warn => 1,
+        _ => 0,
+    });
+    let blocked_causes: Vec<&str> = k.tabs[3]
+        .iter()
+        .filter_map(|r| r.cells[2].strip_prefix(crate::karpenter::BLOCKED))
+        .collect();
+    let n_blocked = blocked_causes.len();
+    let bad_classes = k.tabs[crate::karpenter::CLASSES]
+        .iter()
+        .filter(|r| r.level == Level::Critical)
+        .count();
+    let blocked_warn = k.tabs[3]
+        .iter()
+        .any(|r| r.level == Level::Warn && r.cells[2].starts_with(crate::karpenter::BLOCKED));
+    let (glyph, health) = if app.karpenter_updated.is_none() {
+        ("○ loading…", theme::overlay1())
+    } else if count(2) > 0 || bad_classes > 0 || pools_worst == Some(Level::Critical) {
+        ("▲ attention", theme::red())
+    } else if k.not_ready > 0 || blocked_warn || pools_worst == Some(Level::Warn) {
+        ("▲ degraded", theme::peach())
+    } else {
+        ("● healthy", theme::green())
+    };
+    let mut causes: Vec<(&str, usize)> = Vec::new();
+    for cause in blocked_causes {
+        match causes.iter_mut().find(|c| c.0 == cause) {
+            Some(c) => c.1 += 1,
+            None => causes.push((cause, 1)),
+        }
+    }
+    causes.sort_by_key(|c| matches!(c.0, "deleting" | "initializing" | "other"));
+    let causes: Vec<String> = causes.iter().map(|(c, n)| format!("{n} {c}")).collect();
+    let num = |text: String, bad: bool| {
+        let c = if bad { theme::peach() } else { theme::green() };
+        Span::styled(text, Style::default().fg(c).add_modifier(Modifier::BOLD))
+    };
+    let mut line = vec![Span::styled(
+        format!(" {glyph}  "),
+        Style::default().fg(health).add_modifier(Modifier::BOLD),
+    )];
+    for (i, (title, _)) in crate::karpenter::TABS.iter().enumerate() {
+        let active = i == app.karpenter_tab;
+        let style = if active {
+            theme::selected_row().add_modifier(Modifier::BOLD)
+        } else {
+            theme::dim()
+        };
+        let total = if app.karpenter_updated.is_none() {
+            "…".to_string()
+        } else if active && shown != count(i) {
+            format!("{shown}/{}", count(i))
+        } else {
+            count(i).to_string()
+        };
+        let mut counts = vec![num(total, i == 2 && count(i) > 0)];
+        if i == 1 && k.not_ready > 0 {
+            counts.push(Span::styled(" · ", style));
+            counts.push(num(format!("{} not ready", k.not_ready), true));
+        }
+        if i == crate::karpenter::CLASSES && bad_classes > 0 {
+            counts.push(Span::styled(" · ", style));
+            counts.push(num(format!("{bad_classes} not ready"), true));
+        }
+        if i == 3 && n_blocked > 0 {
+            counts.push(Span::styled(" · ", style));
+            let detail = if active {
+                format!("{n_blocked} blocked: {}", causes.join(", "))
+            } else {
+                format!("{n_blocked} blocked")
+            };
+            counts.push(num(detail, true));
+        }
+        let (open, close) = if active { ("[", "]") } else { (" ", " ") };
+        line.push(Span::styled(format!("{open}{title} ("), style));
+        line.extend(counts);
+        line.push(Span::styled(format!("){close}"), style));
+        line.push(Span::raw(" "));
+    }
+    if !k.events_ok && app.karpenter_updated.is_some() {
+        line.push(Span::styled(" events unavailable", theme::dim()));
+    }
+    let hidden = k.tabs[0].iter().filter(|r| r.idle).count();
+    let (col, desc) = app.karpenter_sort[app.karpenter_tab];
+    let sort_col = col.checked_sub(1);
+    // Search ignores both toggles, so their badges only show without it.
+    let badge = |c| {
+        Style::default()
+            .fg(c)
+            .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+    };
+    if app.karpenter_filter.is_empty() {
+        if app.karpenter_problems {
+            line.push(Span::raw(" "));
+            line.push(Span::styled(" problems only ", badge(theme::red())));
+        }
+        if app.karpenter_tab == 0 && hidden > 0 && !app.karpenter_show_idle {
+            line.push(Span::raw(" "));
+            line.push(Span::styled(
+                format!(" {hidden} idle pools hidden "),
+                badge(theme::blue()),
+            ));
+        }
+    }
+    if app.karpenter_filtering || !app.karpenter_filter.is_empty() {
+        line.push(Span::styled(
+            format!(" /{}", app.karpenter_filter),
+            Style::default()
+                .fg(theme::teal())
+                .add_modifier(Modifier::BOLD),
+        ));
+        if app.karpenter_filtering {
+            line.push(Span::styled("█", Style::default().fg(theme::teal())));
+        }
+    }
+    frame.render_widget(Paragraph::new(Line::from(line)), tabs);
+
+    let headers = crate::karpenter::TABS[app.karpenter_tab].1;
+    let rows: Vec<crate::karpenter::Row> = app.karpenter_rows().into_iter().cloned().collect();
+    let widths: Vec<Constraint> = (0..headers.len())
+        .map(|c| {
+            let w = rows
+                .iter()
+                .map(|r| r.cells[c].width())
+                .chain([headers[c].width()])
+                .max()
+                .unwrap_or(1)
+                // The first column carries a two-cell severity glyph.
+                + if c == 0 { 2 } else { 0 }
+                + if Some(c) == sort_col { 2 } else { 0 };
+            if c + 1 == headers.len() {
+                Constraint::Min(w.min(10) as u16)
+            } else {
+                Constraint::Length(w.min(48) as u16)
+            }
+        })
+        .collect();
+    let body = rows.iter().map(|r| {
+        let cells = r.cells.iter().enumerate().map(|(i, c)| {
+            if i == 0 {
+                Line::from(vec![
+                    Span::styled(
+                        format!("{} ", marker(r.level)),
+                        Style::default().fg(color(r.level)),
+                    ),
+                    Span::raw(c.clone()),
+                ])
+            } else {
+                Line::from(c.clone())
+            }
+        });
+        ratatui::widgets::Row::new(cells)
+    });
+    let empty = if app.karpenter_updated.is_none() {
+        "loading…"
+    } else if app.karpenter_filter.is_empty() {
+        "nothing here"
+    } else {
+        "no match, esc clears the filter"
+    };
+    let arrow_style = Style::default()
+        .fg(theme::sorter())
+        .add_modifier(Modifier::BOLD);
+    let header = ratatui::widgets::Row::new(headers.iter().enumerate().map(|(i, h)| {
+        let mut spans = Vec::new();
+        if i == 0 {
+            // Severity sort marks the glyph slot; worst first reads as ↓.
+            spans.push(match sort_col {
+                None => Span::styled(if desc { "↑ " } else { "↓ " }, arrow_style),
+                Some(_) => Span::raw("  "),
+            });
+        }
+        spans.push(Span::raw((*h).to_string()));
+        if Some(i) == sort_col {
+            spans.push(Span::styled(if desc { " ↓" } else { " ↑" }, arrow_style));
+        }
+        Line::from(spans)
+    }))
+    .style(theme::header_row());
+    let table = ratatui::widgets::Table::new(body, widths)
+        .header(header)
+        .column_spacing(2)
+        .row_highlight_style(theme::selected_row());
+    frame.render_stateful_widget(table, table_area, &mut app.karpenter_state);
+    if rows.is_empty() {
+        frame.render_widget(
+            Paragraph::new(Span::styled(empty, theme::dim())),
+            Rect {
+                y: table_area.y + 1,
+                height: 1,
+                ..table_area
+            },
+        );
+    }
+
+    let sel = app.karpenter_state.selected().and_then(|i| rows.get(i));
+    let lines: Vec<Line> = sel
+        .map(|r| {
+            r.detail
+                .iter()
+                .map(|d| {
+                    if d.starts_with(crate::karpenter::PROBLEM) {
+                        Line::styled(
+                            d.clone(),
+                            Style::default().fg(if r.level == Level::Critical {
+                                theme::red()
+                            } else {
+                                theme::peach()
+                            }),
+                        )
+                    } else if let Some((k, v)) = d.split_once(": ") {
+                        Line::from(vec![
+                            Span::styled(format!("{k}: "), theme::dim()),
+                            Span::styled(v.to_string(), Style::default().fg(theme::text())),
+                        ])
+                    } else {
+                        Line::from(d.clone())
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let title = sel.map_or(" detail ".to_string(), |r| format!(" {} ", r.cells[0]));
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(ratatui::widgets::Wrap { trim: true })
+            .block(
+                Block::default()
+                    .borders(Borders::TOP)
+                    .border_style(theme::border())
+                    .title(Span::styled(title, theme::title())),
+            ),
+        detail_area,
+    );
+}
+
 fn draw_gitops(frame: &mut Frame, app: &mut App, area: Rect) {
     let show_scrollbars = app.scrollbars_visible();
     let title = format!(" {} ", app.gitops_title);
@@ -6228,8 +6522,81 @@ fn counts_tile(frame: &mut Frame, area: Rect, p: &crate::store::Pulse) {
     );
 }
 
+/// Dashboard title as a path: `karpenter › pool › tab`, then refresh state.
+fn karpenter_breadcrumb(app: &App, status: &str) -> Vec<Span<'static>> {
+    let mut path = vec![Span::styled(" karpenter", theme::title())];
+    if let Some(pool) = &app.karpenter_pool {
+        path.push(Span::styled(" › ", theme::dim()));
+        path.push(Span::styled(
+            pool.clone(),
+            Style::default()
+                .fg(theme::teal())
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    path.push(Span::styled(" › ", theme::dim()));
+    path.push(Span::styled(
+        crate::karpenter::TABS[app.karpenter_tab].0,
+        theme::title(),
+    ));
+    if app.karpenter_pool.is_some() && app.karpenter_tab == 2 {
+        path.push(Span::styled(" (all pools)", theme::dim()));
+    }
+    path.push(Span::styled(
+        format!(" · refresh {}s · {status} ", crate::karpenter::REFRESH_SECS),
+        theme::dim(),
+    ));
+    path
+}
+
+/// Bottom-line hints for the Karpenter dashboard.
+fn karpenter_hint(app: &App) -> Line<'static> {
+    if app.karpenter_filtering {
+        literal_hint(&[("enter", ":apply"), ("esc", ":clear")], "  ")
+    } else {
+        let tab = app.karpenter_tab;
+        let back = if app.karpenter_pool.is_some() && app.karpenter_filter.is_empty() {
+            "back to NodePools"
+        } else {
+            "back"
+        };
+        // Most used first: a narrow terminal cuts the line from the right.
+        let mut h = key_hint(
+            app,
+            "karpenter",
+            &[(Action::Back, back), (Action::NextView, "next tab")],
+        );
+        h.spans.push(Span::raw("  "));
+        h.spans.push(Span::styled("?", hint_key_style()));
+        h.spans.push(Span::raw(":help  "));
+        let mut actions = vec![
+            match tab {
+                0 => (Action::Accept, "claims"),
+                1 => (Action::Accept, "node"),
+                2 => (Action::Accept, "open pod"),
+                crate::karpenter::CLASSES => (Action::Accept, "open nodeclass"),
+                _ => (Action::Accept, "open resource"),
+            },
+            (Action::Yaml, "yaml"),
+            (Action::Describe, "describe"),
+            (Action::Filter, "filter"),
+            (Action::Sort, "sort"),
+            (Action::Faults, "problems"),
+        ];
+        if tab == 0 {
+            actions.push((Action::Toggle, "idle pools"));
+        }
+        actions.push((Action::Refresh, "refresh"));
+        h.spans.extend(key_hint(app, "karpenter", &actions).spans);
+        h
+    }
+}
+
 fn navigation_hint(app: &App, width: u16) -> Line<'static> {
     let scope = app.key_scope();
+    if app.mode == Mode::Karpenter {
+        return karpenter_hint(app);
+    }
     if scope == "table" {
         let cycle = [
             Span::styled(

@@ -752,6 +752,7 @@ async fn snapshot(app: &mut App, rx: &mut mpsc::Receiver<store::Msg>) -> Result<
 
     match std::env::var("PUP_DEMO").as_deref() {
         Ok("pulse") => app.open_pulse(),
+        Ok("karpenter") => app.open_karpenter(),
         Ok("xray") => app.open_xray(),
         _ => {}
     }

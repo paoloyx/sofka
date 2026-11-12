@@ -361,7 +361,7 @@ include those conditions. Row filters can search the route paths.
   view history.
 - **Command palette** (`:`) - fuzzy search over the full resource catalog, your
   saved bookmarks and workspaces, and the built-in commands (`ctx`, `helm`,
-  `workloads`, `ns-resources`, `pulse`, `xray`, `explain`, `timeline`, `gitops`, `argocd`, `adjacent`, `users`, `groups`, `policy`, `can-i`, `journal`,
+  `workloads`, `ns-resources`, `pulse`, `karpenter`, `xray`, `explain`, `timeline`, `gitops`, `argocd`, `adjacent`, `users`, `groups`, `policy`, `can-i`, `journal`,
   `debug`,
   `debug-clean`, `bundle`, `bundle-save`, `snapshot`, `snapshots`, `diff`,
   `events`, `pf`, `notify`, `find`, `vlogs`, `rightsize`, `fleet`, `skin`,
@@ -615,6 +615,22 @@ include those conditions. Row filters can search the route paths.
   table; keys, commands, and plugins that act on objects are disabled on these
   rows, while `target = "context"` plugins still run.
 - **Pulse dashboard** (`:pulse`) - cluster-health tiles, refreshed every 5s.
+- **Karpenter dashboard** (`:karpenter`, `:kpt`) - read-only, tabbed tables
+  (NodePools, NodeClaims, Pending pods, Disruption, NodeClasses) with a health badge, per-tab
+  counts and a detail pane. Pools show usage bars against `spec.limits`,
+  disruption budgets and spot/on-demand mix; Claims show age; Pending
+  explains why pods cannot schedule; Disruption shows each node's latest
+  state: consolidation or drift in progress, unconsolidatable, or blocked by
+  cause (PDB, nominated node, `karpenter.sh/do-not-disrupt`; transient
+  `deleting`/`initializing` stay informational); NodeClasses show their pools, claims and
+  readiness, and a class that is not ready makes its pools critical. `tab`/`backtab` switch tabs, `/` filters every column,
+  `S` opens the sort picker, `I` reverses it and `A` sorts by age (per tab), `p` shows problems
+  only, `x` shows idle pools (a filter always finds them), `enter` on a pool
+  focuses it on every tab and `esc` drops the focus, `enter` on a claim opens its
+  node and on other rows the resource, `y`/`d` show any row's YAML/describe in place; `esc` there returns to the dashboard as
+  it was, `[`/`]` walk view history. Refreshed every 5s; the title shows the last update time and
+  `refreshing…` while a load runs. The bottom line lists the
+  keys and `?` opens the full help. See [Karpenter](karpenter.md).
 - **Xray tree** (`:xray`) - a hierarchical view from the current kind down
   through owner references to pods and containers.
 - **RBAC subjects and rules**: `:users` and `:groups` list subjects from

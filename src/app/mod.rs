@@ -212,6 +212,7 @@ pub enum Mode {
     Confirm,
     Prompt,
     Pulse,
+    Karpenter,
     Xray,
     Rbac,
     /// Deterministic "why is this unhealthy?" explanation for the selection.
@@ -781,6 +782,7 @@ enum PaletteAction {
     Mouse,
     Ctx,
     Pulse,
+    Karpenter,
     Xray,
     Users,
     Groups,
@@ -874,6 +876,10 @@ const PALETTE_COMMANDS: &[PaletteCommand] = &[
     PaletteCommand {
         action: PaletteAction::Pulse,
         names: &["pulse", "dashboard", "pu"],
+    },
+    PaletteCommand {
+        action: PaletteAction::Karpenter,
+        names: &["karpenter", "kpt"],
     },
     PaletteCommand {
         action: PaletteAction::Xray,
@@ -2301,6 +2307,8 @@ pub struct App {
     pub sort_picker_state: ListState,
     /// Type-to-filter buffer for the sort-column picker.
     pub sort_picker_filter: String,
+    /// The sort picker was opened from the Karpenter dashboard.
+    pub sort_picker_karpenter: bool,
     pub copy_picker_state: ListState,
     /// Type-to-filter buffer for the copy-field picker.
     pub copy_picker_filter: String,
@@ -2578,6 +2586,22 @@ pub struct App {
     /// object being investigated (kept so `r` can re-gather).
     pub gitops_items: Vec<crate::explain::Finding>,
     pub gitops_state: ListState,
+    pub karpenter: crate::karpenter::Report,
+    pub karpenter_tab: usize,
+    pub karpenter_filter: String,
+    pub karpenter_filtering: bool,
+    pub karpenter_sort: [(usize, bool); 5],
+    pub karpenter_problems: bool,
+    pub karpenter_show_idle: bool,
+    /// Pool whose claims the NodeClaims tab is scoped to after `enter`.
+    pub karpenter_pool: Option<String>,
+    /// Stack depth of a view opened from the dashboard; `esc` there returns.
+    pub karpenter_return: Option<usize>,
+    pub karpenter_state: TableState,
+    /// A load started by open or `r` has not delivered data yet.
+    pub karpenter_loading: bool,
+    /// Local `HH:MM:SS` of the last data delivery.
+    pub karpenter_updated: Option<String>,
     pub gitops_title: String,
     pub gitops_source: Option<DynamicObject>,
     /// Latest GitOps request, independent of the table watch generation.
@@ -2878,6 +2902,7 @@ impl App {
             ctx_filtering: false,
             sort_picker_state: ListState::default(),
             sort_picker_filter: String::new(),
+            sort_picker_karpenter: false,
             copy_picker_state: ListState::default(),
             copy_picker_filter: String::new(),
             copy_picker_fields: Vec::new(),
@@ -3007,6 +3032,18 @@ impl App {
             adjacent_return: Mode::Table,
             gitops_items: Vec::new(),
             gitops_state: ListState::default(),
+            karpenter: Default::default(),
+            karpenter_tab: 0,
+            karpenter_filter: String::new(),
+            karpenter_filtering: false,
+            karpenter_sort: [(0, false); 5],
+            karpenter_problems: false,
+            karpenter_show_idle: false,
+            karpenter_pool: None,
+            karpenter_return: None,
+            karpenter_state: TableState::default(),
+            karpenter_loading: false,
+            karpenter_updated: None,
             gitops_title: String::new(),
             gitops_source: None,
             gitops_request: 0,

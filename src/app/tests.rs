@@ -2119,6 +2119,466 @@ async fn diff_prefers_last_applied_when_present() {
 }
 
 #[tokio::test]
+async fn karpenter_command_needs_karpenter_and_enter_jumps_to_target() {
+    let (mut app, _rx) = test_app();
+    app.handle_key(press(KeyCode::Char(':'))).unwrap();
+    for ch in "karpenter".chars() {
+        app.handle_key(press(KeyCode::Char(ch))).unwrap();
+    }
+    app.handle_key(press(KeyCode::Enter)).unwrap();
+    assert_eq!(app.mode, Mode::Table);
+    assert!(app.flash.contains("not installed"), "{}", app.flash);
+
+    app.mode = Mode::Karpenter;
+    let claim = app.claim_status("karpenter…");
+    app.handle_msg(Msg::KarpenterData {
+        generation: app.generation,
+        claim,
+        items: {
+            let row = |n: &str, plural: &str| crate::karpenter::Row {
+                cells: [n, "why"]
+                    .into_iter()
+                    .chain(["x"; 7])
+                    .map(String::from)
+                    .collect(),
+                level: crate::explain::Level::Warn,
+                target: Some(crate::explain::Target {
+                    plural: plural.into(),
+                    namespace: Some("ns".into()),
+                    name: n.into(),
+                }),
+                detail: Vec::new(),
+                idle: false,
+                node: None,
+                pool: None,
+                age: None,
+                object: None,
+            };
+            let mut r = crate::karpenter::Report::default();
+            r.tabs[0] = ["alpha", "beta"]
+                .map(|n| {
+                    let mut p = row(n, "nodepools");
+                    p.pool = Some(n.into());
+                    p
+                })
+                .into();
+            r.tabs[1] = ["beta", "betamax"]
+                .map(|pool| {
+                    let mut c = row(&format!("{pool}-c"), "nodeclaims");
+                    c.cells[1] = pool.into();
+                    c.node = Some(format!("{pool}-node"));
+                    c.pool = Some(pool.into());
+                    c
+                })
+                .into();
+            r.tabs[2] = vec![row("p", "pods")];
+            r
+        },
+        warn: None,
+    });
+    assert_eq!(app.karpenter_state.selected(), Some(0));
+    app.handle_key(press(KeyCode::Char('/'))).unwrap();
+    for ch in "bet".chars() {
+        app.handle_key(press(KeyCode::Char(ch))).unwrap();
+    }
+    app.handle_key(press(KeyCode::Enter)).unwrap();
+    assert_eq!(app.karpenter_rows().len(), 1);
+    app.handle_key(press(KeyCode::Esc)).unwrap();
+    assert_eq!(app.karpenter_rows().len(), 2);
+    app.karpenter.tabs[0][0].idle = true;
+    assert_eq!(app.karpenter_rows().len(), 1);
+    app.handle_key(press(KeyCode::Char('x'))).unwrap();
+    assert_eq!(app.karpenter_rows().len(), 2);
+    // S opens the table sort picker; the first entry is severity.
+    app.handle_key(press(KeyCode::Char('S'))).unwrap();
+    assert_eq!(app.mode, Mode::SortPicker);
+    assert_eq!(app.filtered_sort_entries()[0], "severity (default)");
+    app.handle_key(press(KeyCode::Down)).unwrap();
+    app.handle_key(press(KeyCode::Enter)).unwrap();
+    assert_eq!(app.mode, Mode::Karpenter);
+    assert_eq!(app.karpenter_rows()[0].cells[0], "alpha");
+    // Re-picking the active column reverses it; NodePools has no AGE.
+    app.handle_key(press(KeyCode::Char('S'))).unwrap();
+    app.handle_key(press(KeyCode::Enter)).unwrap();
+    assert_eq!(app.karpenter_rows()[0].cells[0], "beta");
+    app.handle_key(press(KeyCode::Char('A'))).unwrap();
+    assert_eq!(app.mode, Mode::Karpenter);
+    assert!(app.flash.contains("no AGE column"));
+    app.handle_key(press(KeyCode::Char('p'))).unwrap();
+    assert_eq!(app.karpenter_rows().len(), 2);
+    app.karpenter.tabs[0][1].level = crate::explain::Level::Good;
+    assert_eq!(app.karpenter_rows().len(), 1);
+    app.handle_key(press(KeyCode::Char('p'))).unwrap();
+    let selected_pool = |app: &App| {
+        let rows = app.karpenter_rows();
+        (
+            app.karpenter_tab,
+            rows[app.karpenter_state.selected().unwrap()].cells[0].clone(),
+        )
+    };
+    let names = |app: &App| {
+        app.karpenter_rows()
+            .iter()
+            .map(|r| r.cells[0].clone())
+            .collect::<Vec<_>>()
+    };
+    // enter focuses the pool (exact name) on every tab but Pending; esc drops it.
+    app.handle_key(press(KeyCode::Enter)).unwrap();
+    assert_eq!((app.karpenter_tab, names(&app)), (1, vec!["beta-c".into()]));
+    app.handle_key(press(KeyCode::Tab)).unwrap();
+    assert_eq!(names(&app), ["p"]);
+    assert!(karpenter_screen(&mut app).contains("karpenter › beta › Pending pods (all pools)"));
+    app.handle_key(press(KeyCode::BackTab)).unwrap();
+    app.handle_key(press(KeyCode::BackTab)).unwrap();
+    assert_eq!((app.karpenter_tab, names(&app)), (0, vec!["beta".into()]));
+    app.handle_key(press(KeyCode::Tab)).unwrap();
+    assert_eq!(names(&app), ["beta-c"]);
+    app.handle_key(press(KeyCode::Esc)).unwrap();
+    assert_eq!(selected_pool(&app), (0, "beta".into()));
+    assert_eq!((app.karpenter_pool.clone(), names(&app).len()), (None, 2));
+    for _ in 0..2 {
+        app.handle_key(press(KeyCode::Tab)).unwrap();
+    }
+    assert_eq!(app.karpenter_tab, 2);
+    app.handle_key(press(KeyCode::Enter)).unwrap();
+    assert_eq!(app.mode, Mode::Table);
+    assert_eq!(app.kind_plural, "pods");
+    assert_eq!(app.namespace, "ns");
+    // esc from the opened view returns to the dashboard as it was left.
+    app.handle_key(press(KeyCode::Esc)).unwrap();
+    assert_eq!((app.mode, app.karpenter_tab), (Mode::Karpenter, 2));
+
+    // enter on a NodeClaim descends to its node.
+    app.handle_key(press(KeyCode::BackTab)).unwrap();
+    app.handle_key(press(KeyCode::Enter)).unwrap();
+    assert_eq!((app.mode, app.kind_plural.as_str()), (Mode::Table, "nodes"));
+    assert_eq!(app.scope_label.as_deref(), Some("beta-node"));
+    app.handle_key(press(KeyCode::Esc)).unwrap();
+    assert_eq!((app.mode, app.karpenter_tab), (Mode::Karpenter, 1));
+    assert_ne!(app.kind_plural, "nodes");
+}
+
+#[tokio::test]
+async fn karpenter_bracket_keys_walk_history_and_question_opens_help() {
+    let (mut app, _rx) = test_app();
+    app.switch_kind("pods");
+    app.switch_kind("nodes");
+    app.record_view(crate::karpenter::VIEW);
+    app.mode = Mode::Karpenter;
+    app.handle_key(press(KeyCode::Char('['))).unwrap();
+    assert_eq!((app.mode, app.kind_plural.as_str()), (Mode::Table, "nodes"));
+
+    app.mode = Mode::Karpenter;
+    app.handle_key(press(KeyCode::Char('?'))).unwrap();
+    assert_eq!(app.mode, Mode::Help);
+    assert_eq!(app.help_return, Mode::Karpenter);
+    // History back into a loaded dashboard keeps its tab.
+    for (kind, plural) in [("NodePool", "nodepools"), ("NodeClaim", "nodeclaims")] {
+        app.cluster
+            .register_kind("karpenter.sh", kind, plural, false);
+    }
+    app.mode = Mode::Karpenter;
+    app.karpenter_updated = Some("12:00:00".into());
+    app.handle_key(press(KeyCode::Tab)).unwrap();
+    app.handle_key(press(KeyCode::Tab)).unwrap();
+    app.mode = Mode::Table;
+    app.handle_key(press(KeyCode::Char(']'))).unwrap();
+    assert_eq!((app.mode, app.karpenter_tab), (Mode::Karpenter, 2));
+}
+
+#[tokio::test]
+async fn karpenter_y_and_d_open_the_row_object_and_esc_returns() {
+    let (mut app, _rx) = test_app();
+    app.cluster
+        .register_kind("karpenter.k8s.aws", "EC2NodeClass", "ec2nodeclasses", false);
+    app.mode = Mode::Karpenter;
+    app.karpenter_updated = Some("12:00:00".into());
+    let row =
+        |name: &str, cells: [&str; 3], object: Option<serde_json::Value>| crate::karpenter::Row {
+            cells: [name].into_iter().chain(cells).map(String::from).collect(),
+            level: crate::explain::Level::Good,
+            target: Some(crate::explain::Target {
+                plural: "ec2nodeclass".into(),
+                namespace: None,
+                name: name.into(),
+            }),
+            detail: Vec::new(),
+            idle: false,
+            node: None,
+            pool: None,
+            age: None,
+            object,
+        };
+    let class = json!({
+        "apiVersion": "karpenter.k8s.aws/v1",
+        "kind": "EC2NodeClass",
+        "metadata": {"name": "default"},
+    });
+    app.karpenter.tabs[crate::karpenter::CLASSES] = vec![
+        row("default", ["EC2NodeClass", "a, b", "1"], Some(class)),
+        row("other", ["EC2NodeClass", "c", "0"], None),
+    ];
+    app.karpenter_tab = crate::karpenter::CLASSES;
+    app.karpenter_state.select(Some(0));
+    app.handle_key(press(KeyCode::Char('y'))).unwrap();
+    assert_eq!(app.mode, Mode::Detail);
+    assert!(app.detail.title.contains("default"), "{}", app.detail.title);
+    app.handle_key(press(KeyCode::Esc)).unwrap();
+    assert_eq!(
+        (app.mode, app.karpenter_tab),
+        (Mode::Karpenter, crate::karpenter::CLASSES)
+    );
+    app.handle_key(press(KeyCode::Char('d'))).unwrap();
+    assert_eq!(app.mode, Mode::Detail);
+    let (_, argv) = app.describe_source.clone().unwrap();
+    assert!(
+        argv.ends_with(&[
+            "--".into(),
+            "ec2nodeclasses.karpenter.k8s.aws".into(),
+            "default".into()
+        ]),
+        "{argv:?}"
+    );
+    app.handle_key(press(KeyCode::Esc)).unwrap();
+    assert_eq!(app.mode, Mode::Karpenter);
+    // Pool focus narrows NodeClasses to the classes that pool uses.
+    app.karpenter_pool = Some("c".into());
+    app.karpenter_reselect();
+    assert_eq!(app.karpenter_rows().len(), 1);
+    assert_eq!(app.karpenter_rows()[0].cells[0], "other");
+    app.handle_key(press(KeyCode::Char('y'))).unwrap();
+    assert_eq!(app.mode, Mode::Karpenter);
+    assert!(
+        app.flash.contains("other no longer exists"),
+        "{}",
+        app.flash
+    );
+    app.handle_key(press(KeyCode::Enter)).unwrap();
+    assert_eq!(
+        (app.mode, app.kind_plural.as_str()),
+        (Mode::Table, "ec2nodeclasses")
+    );
+}
+
+#[tokio::test]
+async fn karpenter_first_load_shows_loading_not_empty() {
+    let (mut app, _rx) = test_app();
+    for (kind, plural) in [("NodePool", "nodepools"), ("NodeClaim", "nodeclaims")] {
+        app.cluster
+            .register_kind("karpenter.sh", kind, plural, false);
+    }
+    app.handle_key(press(KeyCode::Char(':'))).unwrap();
+    for ch in "karpenter".chars() {
+        app.handle_key(press(KeyCode::Char(ch))).unwrap();
+    }
+    app.handle_key(press(KeyCode::Enter)).unwrap();
+    assert_eq!(app.mode, Mode::Karpenter);
+    let screen = karpenter_screen(&mut app);
+    assert!(screen.contains("[NodePools (…)]"), "{screen}");
+    assert!(screen.contains("loading…"), "{screen}");
+    assert!(!screen.contains("nothing here"), "{screen}");
+}
+
+fn karpenter_screen(app: &mut App) -> String {
+    use ratatui::{Terminal, backend::TestBackend};
+    let mut terminal = Terminal::new(TestBackend::new(200, 45)).unwrap();
+    terminal.draw(|f| crate::ui::draw(f, app)).unwrap();
+    let buf = terminal.backend().buffer().clone();
+    buf.content
+        .chunks(200)
+        .map(|row| row.iter().map(|c| c.symbol()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[tokio::test]
+async fn karpenter_screen_marks_active_tab_sort_and_context_hints() {
+    use crate::explain::Level;
+    let (mut app, _rx) = test_app();
+    app.mode = Mode::Karpenter;
+    let mut report = crate::karpenter::Report::default();
+    let row = |n: usize, level: Level, name: &str| crate::karpenter::Row {
+        cells: (0..n)
+            .map(|i| if i == 0 { name.into() } else { "x".to_string() })
+            .collect(),
+        level,
+        target: None,
+        detail: Vec::new(),
+        idle: false,
+        node: None,
+        pool: None,
+        age: None,
+        object: None,
+    };
+    let mut idle = row(8, Level::Good, "pool-idle");
+    idle.idle = true;
+    report.tabs[0] = vec![row(8, Level::Good, "pool-a"), idle];
+    report.tabs[2] = vec![row(3, Level::Warn, "pending-p")];
+    let mut blocked = row(5, Level::Warn, "blocked-b");
+    blocked.cells[2] = "blocked: PDB".into();
+    let mut deleting = row(5, Level::Info, "deleting-d");
+    deleting.cells[2] = "blocked: deleting".into();
+    report.tabs[3] = vec![
+        deleting,
+        blocked,
+        row(5, Level::Info, "calm-node"),
+        row(5, Level::Warn, "busy-node"),
+    ];
+    app.karpenter = report;
+    app.karpenter_updated = Some("12:00:00".into());
+    app.karpenter_state.select(Some(0));
+
+    let screen = karpenter_screen(&mut app);
+    assert!(
+        screen.contains("karpenter › NodePools · refresh 5s"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("▲ attention  [NodePools (1/2)]")
+            && screen.contains(" 1 idle pools hidden ")
+            && screen.contains(" Disruption (4 · 2 blocked) "),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("↓ NAME") && screen.contains("● ok ○ info ▲ warn ▲ critical"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("x:idle pools")
+            && screen.contains("enter:claims  y:yaml  d:describe")
+            && screen.contains("tab:next tab")
+            && screen.contains("/:filter")
+            && screen.contains("S:sort")
+            && !screen.contains("I:")
+            && !screen.contains("accept selection"),
+        "{screen}"
+    );
+    app.handle_key(press(KeyCode::Char('p'))).unwrap();
+    app.handle_key(press(KeyCode::Char('x'))).unwrap();
+    let screen = karpenter_screen(&mut app);
+    assert!(
+        screen.contains(" problems only ") && !screen.contains("idle pools hidden"),
+        "{screen}"
+    );
+    app.handle_key(press(KeyCode::Char('x'))).unwrap();
+    app.karpenter_filter = "pool".into();
+    let screen = karpenter_screen(&mut app);
+    assert!(
+        !screen.contains("problems only") && !screen.contains("idle pools hidden"),
+        "{screen}"
+    );
+    app.karpenter_filter.clear();
+    app.handle_key(press(KeyCode::Char('p'))).unwrap();
+
+    app.handle_key(press(KeyCode::Tab)).unwrap();
+    app.handle_key(press(KeyCode::Tab)).unwrap();
+    let screen = karpenter_screen(&mut app);
+    assert!(
+        screen.contains("[Pending pods (1)]") && !screen.contains("[NodePools"),
+        "{screen}"
+    );
+    assert!(
+        !screen.contains("x:idle pools")
+            && !screen.contains("enter:claims")
+            && !screen.contains("o:node"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("enter:open pod") && !screen.contains("[:"),
+        "{screen}"
+    );
+
+    app.handle_key(press(KeyCode::Tab)).unwrap();
+    let screen = karpenter_screen(&mut app);
+    assert!(
+        screen.contains("[Disruption (4 · 2 blocked: 1 PDB, 1 deleting)]"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("○ calm-node") && screen.contains("▲ busy-node"),
+        "{screen}"
+    );
+    let order = |app: &App| {
+        app.karpenter_rows()
+            .iter()
+            .map(|r| r.cells[0].clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        order(&app),
+        ["blocked-b", "busy-node", "deleting-d", "calm-node"]
+    );
+    app.handle_key(press(KeyCode::Char('S'))).unwrap();
+    app.handle_key(press(KeyCode::Enter)).unwrap();
+    assert_eq!(
+        order(&app),
+        ["calm-node", "deleting-d", "busy-node", "blocked-b"]
+    );
+    assert!(karpenter_screen(&mut app).contains("↑ OBJECT"));
+    app.handle_key(press(KeyCode::Char('S'))).unwrap();
+    assert!(karpenter_screen(&mut app).contains("Sort by"));
+    app.handle_key(press(KeyCode::Down)).unwrap();
+    app.handle_key(press(KeyCode::Enter)).unwrap();
+    let screen = karpenter_screen(&mut app);
+    assert!(
+        screen.contains("OBJECT ↑") && !screen.contains("sorted by"),
+        "{screen}"
+    );
+    app.handle_key(press(KeyCode::Char('S'))).unwrap();
+    app.handle_key(press(KeyCode::Enter)).unwrap();
+    assert!(karpenter_screen(&mut app).contains("OBJECT ↓"));
+    app.handle_key(press(KeyCode::Char('A'))).unwrap();
+    assert!(karpenter_screen(&mut app).contains("AGE ↑"));
+    app.handle_key(press(KeyCode::Char('A'))).unwrap();
+    assert!(karpenter_screen(&mut app).contains("AGE ↓"));
+    app.handle_key(press(KeyCode::Char('I'))).unwrap();
+    assert!(karpenter_screen(&mut app).contains("AGE ↑"));
+
+    app.handle_key(press(KeyCode::Char('/'))).unwrap();
+    assert!(karpenter_screen(&mut app).contains("enter:apply"));
+}
+
+#[tokio::test]
+async fn karpenter_refresh_key_restarts_loader_and_forward_history_needs_crds() {
+    let (mut app, _rx) = test_app();
+    app.mode = Mode::Karpenter;
+    let before = app.generation;
+    app.handle_key(press(KeyCode::Char('r'))).unwrap();
+    assert!(app.generation > before);
+    let screen = karpenter_screen(&mut app);
+    assert!(
+        screen.contains("refreshing…")
+            && screen.contains("○ loading…")
+            && !screen.contains("healthy")
+            && !screen.contains("events unavailable"),
+        "{screen}"
+    );
+    let claim = app.claim_status("karpenter…");
+    app.handle_msg(Msg::KarpenterData {
+        generation: app.generation,
+        claim,
+        items: Default::default(),
+        warn: None,
+    });
+    let screen = karpenter_screen(&mut app);
+    assert!(
+        screen.contains("refresh 5s · updated ")
+            && !screen.contains("refreshing")
+            && screen.contains("● healthy"),
+        "{screen}"
+    );
+
+    app.mode = Mode::Table;
+    app.switch_kind("pods");
+    app.switch_kind("nodes");
+    app.record_view(crate::karpenter::VIEW);
+    app.handle_key(press(KeyCode::Char('['))).unwrap();
+    app.handle_key(press(KeyCode::Char(']'))).unwrap();
+    assert_eq!(app.mode, Mode::Table);
+    assert!(app.flash.contains("not installed"), "{}", app.flash);
+}
+
+#[tokio::test]
 async fn pulse_and_xray_warns_surface_as_flash() {
     let (mut app, _rx) = test_app();
     let data = crate::store::Pulse {
@@ -17666,7 +18126,7 @@ async fn help_search_keeps_section_headings_with_matching_bindings() {
             app.handle_key(press(KeyCode::Char(c))).unwrap();
         }
         app.handle_key(press(KeyCode::Enter)).unwrap();
-        let mut terminal = Terminal::new(TestBackend::new(120, 120)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(120, 220)).unwrap();
         terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
         let rows: Vec<String> = terminal
             .backend()
@@ -17677,7 +18137,7 @@ async fn help_search_keeps_section_headings_with_matching_bindings() {
             .collect();
         let text = rows.join("\n");
         if filter == "enter" {
-            let mut matches = 3; // The command heading and two RBAC command rows also match.
+            let mut matches = 5; // The command heading, two RBAC rows, and the karpenter heading and command row also match.
             for (scope, action, _) in app.keymap.entries() {
                 let label = app.keymap.label(scope, action);
                 if !label.contains("enter") {
@@ -37044,6 +37504,7 @@ fn key_action_fixture(scope: &str) -> (App, Receiver<Msg>) {
         "confirm" => Mode::Confirm,
         "prompt" => Mode::Prompt,
         "pulse" => Mode::Pulse,
+        "karpenter" => Mode::Karpenter,
         "xray" => Mode::Xray,
         "rbac" => Mode::Rbac,
         "explain" => Mode::Explain,

@@ -181,6 +181,7 @@ impl App {
         self.stack.clear();
         self.workloads = None;
         self.argocd_return = None;
+        self.karpenter_return = None;
         self.kind_plural = kind.ar.plural.to_lowercase();
         self.kind = Some(kind);
         self.labels = None;
@@ -306,8 +307,13 @@ impl App {
         if self.kind.is_none() {
             return;
         }
+        self.record_view(&self.kind_plural.clone());
+    }
+
+    /// Like `record_history`, but for a full-screen view that is not a kind.
+    pub(super) fn record_view(&mut self, kind_plural: &str) {
         let entry = ViewEntry {
-            kind_plural: self.kind_plural.clone(),
+            kind_plural: kind_plural.to_string(),
             namespace: self.namespace.clone(),
             filter: self.filter.clone(),
             layout: self.active_layout().map(str::to_string),
@@ -347,6 +353,14 @@ impl App {
         let Some(entry) = self.history.get(self.history_pos).cloned() else {
             return;
         };
+        if entry.kind_plural == crate::karpenter::VIEW {
+            if self.karpenter_updated.is_some() && self.cluster.resolve("nodepools").is_some() {
+                self.resume_karpenter();
+            } else {
+                self.open_karpenter();
+            }
+            return;
+        }
         if entry.kind_plural == workloads::VIEW && self.cluster.resolve(workloads::VIEW).is_none() {
             self.namespace = entry.namespace;
             self.set_workloads_root(workloads::WorkloadsView::default());
@@ -1553,6 +1567,21 @@ impl App {
                 self.find_items = items;
                 self.find_state
                     .select((!self.find_items.is_empty()).then_some(0));
+            }
+            Msg::KarpenterData {
+                generation,
+                claim,
+                items,
+                warn,
+            } if generation == self.generation => {
+                self.set_recurring_status(
+                    claim,
+                    warn.map(|w| format!("karpenter data is incomplete — {w}")),
+                );
+                self.karpenter = items;
+                self.karpenter_loading = false;
+                self.karpenter_updated = Some(jiff::Zoned::now().strftime("%H:%M:%S").to_string());
+                self.karpenter_reselect();
             }
             Msg::PulseData {
                 generation,

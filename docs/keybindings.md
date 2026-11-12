@@ -477,16 +477,22 @@ for those operations.
 
 ### `[keys.gitops]`
 
-| Action    | Default bindings |
-| --------- | ---------------- |
-| `accept`  | `enter`          |
-| `back`    | `esc`            |
-| `close`   | `q`              |
-| `down`    | `j`, `down`      |
-| `first`   | `g`, `home`      |
-| `last`    | `G`, `end`       |
-| `refresh` | `r`              |
-| `up`      | `k`, `up`        |
+| Action          | Default bindings       |
+| --------------- | ---------------------- |
+| `accept`        | `enter`                |
+| `back`          | `esc`                  |
+| `close`         | `q`                    |
+| `down`          | `j`, `down`            |
+| `filter`        | `/`                    |
+| `first`         | `g`, `home`            |
+| `last`          | `G`, `end`             |
+| `next_view`     | `tab`, `l`, `right`    |
+| `parent`        | `u`                    |
+| `previous_view` | `backtab`, `h`, `left` |
+| `refresh`       | `r`                    |
+| `sort`          | `s`                    |
+| `toggle`        | `x`                    |
+| `up`            | `k`, `up`              |
 
 ### `[keys.help]`
 
@@ -602,6 +608,31 @@ for those operations.
 | `accept`    | `enter`               |
 | `back`      | `esc`                 |
 | `backspace` | `backspace`, `ctrl-h` |
+
+### `[keys.karpenter]`
+
+| Action            | Default bindings       |
+| ----------------- | ---------------------- |
+| `accept`          | `enter`                |
+| `back`            | `esc`                  |
+| `close`           | `q`                    |
+| `describe`        | `d`                    |
+| `down`            | `j`, `down`            |
+| `faults`          | `p`                    |
+| `filter`          | `/`                    |
+| `first`           | `g`, `home`            |
+| `history_back`    | `[`                    |
+| `history_forward` | `]`                    |
+| `invert_sort`     | `I`                    |
+| `last`            | `G`, `end`             |
+| `next_view`       | `tab`, `l`, `right`    |
+| `previous_view`   | `backtab`, `h`, `left` |
+| `refresh`         | `r`                    |
+| `sort`            | `S`                    |
+| `sort_age`        | `A`                    |
+| `toggle`          | `x`                    |
+| `up`              | `k`, `up`              |
+| `yaml`            | `y`                    |
 
 ### `[keys.pulse]`
 
